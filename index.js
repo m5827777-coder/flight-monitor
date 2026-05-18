@@ -85,13 +85,14 @@ function daysBetween(a, b) {
 function linkBuy(destCode, depStr, retStr) {
   const dep = urlDate(depStr), ret = urlDate(retStr);
   if (!dep || !ret) return `https://www.aviasales.ru/?origin=MOW&destination=${destCode}`;
-  return `https://www.aviasales.ru/search/MOW${dep}${destCode}${ret}3?adults=3&children=2`;
+  // Format: {adults}{child1_age}{child2_age} → "31010" = 3 adults + 2 children age 10
+  return `https://www.aviasales.ru/search/MOW${dep}${destCode}${ret}31010`;
 }
 
 function linkChina(destCode, depStr, retStr) {
   const dep = urlDate(depStr), ret = urlDate(retStr);
   if (!dep || !ret) return `https://www.aviasales.ru/?origin=MOW&destination=${destCode}`;
-  return `https://www.aviasales.ru/search/MOW${dep}${destCode}${ret}3?adults=3&children=2&stops=1`;
+  return `https://www.aviasales.ru/search/MOW${dep}${destCode}${ret}31010?stops=1`;
 }
 
 function stopsLabel(n) {
