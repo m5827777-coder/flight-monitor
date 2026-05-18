@@ -8,7 +8,7 @@ const CFG = {
   botToken:      process.env.TELEGRAM_BOT_TOKEN,
   chatId:        process.env.TELEGRAM_CHAT_ID,
   maxPriceTotal: parseInt(process.env.MAX_PRICE              || '150000'),
-  intervalMin:   parseInt(process.env.CHECK_INTERVAL_MINUTES || '60'),
+  intervalMin:   parseInt(process.env.CHECK_INTERVAL_MINUTES || '30'),
   port:          parseInt(process.env.PORT                   || '3000'),
   adults:        3,
   children:      2,
@@ -68,6 +68,7 @@ function getMonths() {
 const STATE = {
   startedAt:    new Date().toISOString(),
   lastCheck:    null,
+  nextCheck:    null,
   checks:       0,
   dealsFound:   0,
   errors:       0,
@@ -75,6 +76,7 @@ const STATE = {
   sentKeys:     new Set(),
   lastRaw:      0,
   lastPassed:   0,
+  lastDeals:    [],   // сохраняем последние результаты для дашборда
 };
 
 function log(msg, lvl = 'INFO') {
@@ -104,26 +106,47 @@ function daysBetween(a, b) {
 }
 
 // ── Aviasales links ────────────────────────────────────────────────────────
-// Формат пассажиров: {adults}{child1age}{child2age}
-// 3 взрослых + дети 8 и 10 лет → "30810"
-// ⚠️ API даёт цену за 1 взрослого. Реальная цена на сайте для 5 пас. может отличаться.
-const PAX_SUFFIX = '30810'; // 3 adults, child 8yo, child 10yo
+// Travelpayouts API кэширует цены 1–3 дня — конкретный рейс может исчезнуть.
+// Поэтому даём ДВЕ ссылки:
+//   linkBuy   — поиск на конкретные даты с правильным числом пас. (query params)
+//   linkFlex  — календарь цен на месяц: всегда актуален, сразу 5 пас.
+//   linkChina — то же, но через пересадку в Китае (ищет более дешёвые варианты)
 
+// ISO → YYYY-MM-DD (Aviasales принимает этот формат в query)
+function isoDate(str) {
+  if (!str) return '';
+  const d = new Date(str);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+// Поиск на конкретные даты — может не найти если рейс раскуплен
 function linkBuy(destCode, depStr, retStr) {
-  const dep = urlDate(depStr), ret = urlDate(retStr);
-  if (!dep || !ret) return `https://www.aviasales.ru/?origin=MOW&destination=${destCode}&adults=3&children=2`;
-  return `https://www.aviasales.ru/search/MOW${dep}${destCode}${ret}${PAX_SUFFIX}`;
+  const dep = isoDate(depStr), ret = isoDate(retStr);
+  const base = `https://www.aviasales.ru/search/MOW0${destCode}0`;
+  if (!dep || !ret) {
+    return `https://www.aviasales.ru/?origin=MOW&destination=${destCode}&adults=3&children=2`;
+  }
+  // Aviasales query-param формат: гарантированно открывает с нужным числом пас.
+  return `https://www.aviasales.ru/?origin=MOW&destination=${destCode}&depart_date=${dep}&return_date=${ret}&adults=3&children=2`;
 }
 
-function linkFlex(destCode) {
-  // Гибкие даты — удобно когда точные даты ещё не выбраны
-  return `https://www.aviasales.ru/calendar/MOW${destCode}?adults=3&children=2&one_way=false`;
+// Календарь цен на весь месяц — всегда актуален
+function linkFlex(destCode, depStr) {
+  const d = depStr ? new Date(depStr) : new Date();
+  const month = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  return `https://www.aviasales.ru/calendar/MOW${destCode}?adults=3&children=2&one_way=false&month=${month}`;
 }
 
+// Поиск через Китай (пересадка) — ищет дешевле
 function linkChina(destCode, depStr, retStr) {
-  const dep = urlDate(depStr), ret = urlDate(retStr);
-  if (!dep || !ret) return `https://www.aviasales.ru/?origin=MOW&destination=${destCode}&adults=3&children=2`;
-  return `https://www.aviasales.ru/search/MOW${dep}${destCode}${ret}${PAX_SUFFIX}?stops=1`;
+  const dep = isoDate(depStr), ret = isoDate(retStr);
+  if (!dep || !ret) {
+    return `https://www.aviasales.ru/?origin=MOW&destination=${destCode}&adults=3&children=2&stops=1`;
+  }
+  return `https://www.aviasales.ru/?origin=MOW&destination=${destCode}&depart_date=${dep}&return_date=${ret}&adults=3&children=2&stops=1`;
 }
 
 function stopsLabel(n) {
@@ -194,7 +217,7 @@ async function collectAll() {
 
           const days = daysBetween(depStr, retStr);
 
-          // Принимаем в диапазоне ±2 дня от заданного
+          // Основной диапазон + ±2 дня (помечаем как ⚡ вне диапазона)
           if (days == null || days < CFG.minDays - 2 || days > CFG.maxDays + 2) continue;
 
           const inRange = days >= CFG.minDays && days <= CFG.maxDays;
@@ -225,22 +248,29 @@ async function collectAll() {
 
   STATE.lastRaw    = raw;
   STATE.lastPassed = passed;
+  const sorted = all.sort((a, b) => a.totalRub - b.totalRub);
+  STATE.lastDeals = sorted;  // сохраняем для дашборда
   log(`Итого: ${raw} из API → ${passed} прошло фильтр`);
-  return all.sort((a, b) => a.totalRub - b.totalRub);
+  return sorted;
 }
 
 // ── Telegram ───────────────────────────────────────────────────────────────
-async function tg(text) {
+// buttons: [[{ text, url }], ...] — массив рядов кнопок (inline keyboard)
+async function tg(text, buttons) {
+  const body = {
+    chat_id:                  CFG.chatId,
+    text,
+    parse_mode:               'HTML',
+    disable_web_page_preview: true,
+  };
+  if (buttons && buttons.length) {
+    body.reply_markup = { inline_keyboard: buttons };
+  }
   try {
     const r = await fetch(`https://api.telegram.org/bot${CFG.botToken}/sendMessage`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id:                  CFG.chatId,
-        text,
-        parse_mode:               'HTML',
-        disable_web_page_preview: true,
-      }),
+      body:    JSON.stringify(body),
     });
     const d = await r.json();
     if (!d.ok) throw new Error(d.description);
@@ -312,17 +342,29 @@ function buildAlert(good) {
   let msg = `🔥 <b>БИЛЕТЫ В БЮДЖЕТЕ!</b> · ${now}\n`;
   msg += `🏖 Москва → пляжи · туда-обратно\n`;
   msg += `👨‍👩‍👧‍👦 3 взр + 2 дет · до ${CFG.maxPriceTotal.toLocaleString('ru-RU')} ₽\n\n`;
+
+  // Inline-кнопки: по одной строке на каждый рейс
+  const buttons = [];
+
   good.slice(0, 5).forEach((d, i) => {
     const pp = Math.round(d.totalRub / (CFG.adults + CFG.children));
     msg += `<b>${i+1}. 🏖 ${d.dest.city}, ${d.dest.country}</b>\n`;
     msg += `📅 ${ruDate(d.depStr)} → ${ruDate(d.retStr)} (${d.days} дн.)\n`;
     msg += `✈️ ${d.airline}`;
     if (d.transfers != null) msg += ` · ${stopsLabel(d.transfers)}`;
-    msg += `\n💰 <b>${d.totalRub.toLocaleString('ru-RU')} ₽</b> (~${pp.toLocaleString('ru-RU')} ₽/чел)\n`;
-    msg += `🛒 <a href="${d.linkBuy}">Купить на Aviasales</a>\n`;
-    msg += `🇨🇳 <a href="${d.linkChina}">Искать через Китай</a>\n\n`;
+    msg += `\n💰 <b>${d.totalRub.toLocaleString('ru-RU')} ₽</b> (~${pp.toLocaleString('ru-RU')} ₽/чел)\n\n`;
+
+    // Кнопки: [🛒 Купить] [📅 Даты] [🇨🇳 Китай]
+    buttons.push([
+      { text: `🛒 ${d.dest.city} — ${d.totalRub.toLocaleString('ru-RU')} ₽`, url: d.linkBuy },
+    ]);
+    buttons.push([
+      { text: `📅 Гибкие даты`, url: d.linkFlex },
+      { text: `🇨🇳 Через Китай`, url: d.linkChina },
+    ]);
   });
-  return msg;
+
+  return { msg, buttons };
 }
 
 // ── Main check ─────────────────────────────────────────────────────────────
@@ -350,7 +392,8 @@ async function runCheck() {
       if (fresh.length > 0) {
         STATE.dealsFound += fresh.length;
         log(`🎉 Новых в бюджете: ${fresh.length}`);
-        await tg(buildAlert(fresh));
+        const { msg, buttons } = buildAlert(fresh);
+        await tg(msg, buttons);
       }
     }
 
@@ -366,23 +409,134 @@ async function runCheck() {
   }
 }
 
-// ── Health ─────────────────────────────────────────────────────────────────
+// ── Web Dashboard ──────────────────────────────────────────────────────────
+function renderDashboard() {
+  const deals = STATE.lastDeals || [];
+  const now   = new Date().toLocaleString('ru-RU');
+  const upMin = Math.floor(process.uptime() / 60);
+  const next  = STATE.nextCheck ? new Date(STATE.nextCheck).toLocaleString('ru-RU') : '—';
+  const budget= CFG.maxPriceTotal;
+
+  const inBudget = deals.filter(d => d.totalRub <= budget && d.inRange);
+  const statusColor = inBudget.length > 0 ? '#22d3a0' : '#f59e0b';
+  const statusText  = inBudget.length > 0
+    ? `🟢 НАЙДЕНО ${inBudget.length} В БЮДЖЕТЕ!`
+    : `🟡 Пока дороже бюджета`;
+
+  // Unique by destination (cheapest per dest)
+  const byDest = new Map();
+  for (const d of deals) if (!byDest.has(d.dest.code)) byDest.set(d.dest.code, d);
+  const top = [...byDest.values()].slice(0, 20);
+
+  const rows = top.map(d => {
+    const pp   = Math.round(d.totalRub / (CFG.adults + CFG.children));
+    const diff = d.totalRub - budget;
+    const ok   = diff <= 0;
+    const flag = { 'Таиланд':'🇹🇭','Вьетнам':'🇻🇳','Индонезия':'🇮🇩','Малайзия':'🇲🇾',
+                   'Филиппины':'🇵🇭','Мальдивы':'🇲🇻','Сингапур':'🇸🇬','Камбоджа':'🇰🇭','Шри-Ланка':'🇱🇰' }[d.dest.country] || '🏖';
+    const near = d.inRange ? '' : ' <span style="color:#f59e0b;font-size:11px">⚡±2дн</span>';
+    const diffStr = ok
+      ? `<span style="color:#22d3a0">✅ -${Math.abs(diff).toLocaleString('ru-RU')} ₽</span>`
+      : `<span style="color:#f87171">+${diff.toLocaleString('ru-RU')} ₽</span>`;
+    return `<tr style="border-bottom:1px solid #1a2e4a">
+      <td style="padding:10px 8px;font-weight:600;white-space:nowrap">${flag} ${d.dest.city}${near}</td>
+      <td style="padding:10px 8px;color:#94a3b8">${d.dest.country}</td>
+      <td style="padding:10px 8px;white-space:nowrap">${ruDate(d.depStr)} → ${ruDate(d.retStr)}</td>
+      <td style="padding:10px 8px;color:#94a3b8;text-align:center">${d.days}д</td>
+      <td style="padding:10px 8px;color:#94a3b8">${d.airline}</td>
+      <td style="padding:10px 8px;font-weight:700;font-size:16px;color:${ok?'#22d3a0':'#e2eaf5'};white-space:nowrap">${d.totalRub.toLocaleString('ru-RU')} ₽</td>
+      <td style="padding:10px 8px;color:#64748b;white-space:nowrap">~${pp.toLocaleString('ru-RU')}/чел</td>
+      <td style="padding:10px 8px">${diffStr}</td>
+      <td style="padding:10px 8px;white-space:nowrap">
+        <a href="${d.linkBuy}" target="_blank" style="background:#1d4ed8;color:#fff;padding:5px 10px;border-radius:6px;text-decoration:none;font-size:12px;margin-right:4px">🛒 Купить</a>
+        <a href="${d.linkFlex}" target="_blank" style="background:#0f4c81;color:#fff;padding:5px 10px;border-radius:6px;text-decoration:none;font-size:12px">📅 Даты</a>
+      </td>
+    </tr>`;
+  }).join('');
+
+  const noData = deals.length === 0
+    ? `<tr><td colspan="9" style="text-align:center;padding:40px;color:#334155">
+        ${STATE.running ? '⟳ Идёт проверка...' : 'Нет данных. Ожидаем следующую проверку.'}
+       </td></tr>`
+    : '';
+
+  return `<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="refresh" content="60">
+<title>✈️ Flight Monitor · MOW → ЮВА</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:system-ui,sans-serif;background:#060b16;color:#c8d6e8;min-height:100vh}
+  .header{background:linear-gradient(135deg,#0d1f3c,#0a1628);border-bottom:1px solid #1a2e4a;padding:16px 24px}
+  .title{font-size:22px;font-weight:700;color:#e2eaf5}
+  .sub{font-size:13px;color:#64748b;margin-top:4px}
+  .status{display:inline-block;padding:4px 14px;border-radius:20px;font-size:13px;font-weight:600;background:#0d1f3c;border:1px solid ${statusColor};color:${statusColor}}
+  .stats{display:flex;gap:12px;flex-wrap:wrap;padding:14px 24px;background:#0a1220;border-bottom:1px solid #1a2e4a}
+  .stat{background:#0d1f3c;border:1px solid #1a3a5c;border-radius:8px;padding:8px 16px;font-size:13px}
+  .stat b{display:block;font-size:18px;color:#7db4e0}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th{background:#0d1f3c;padding:10px 8px;text-align:left;font-size:11px;letter-spacing:1px;color:#475569;text-transform:uppercase;position:sticky;top:0}
+  tr:hover td{background:#0d1f2a}
+  .wrap{overflow-x:auto;padding:16px 24px}
+  .note{font-size:11px;color:#334155;padding:12px 24px;border-top:1px solid #1a2e4a;text-align:center}
+  @media(max-width:600px){.stats{padding:10px 12px}.wrap{padding:10px 12px}th,td{font-size:12px;padding:8px 5px}}
+</style>
+</head>
+<body>
+<div class="header">
+  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+    <div>
+      <div class="title">✈️ MOW → ЮВА · Flight Monitor</div>
+      <div class="sub">3 взр + 2 дет · туда-обратно · ${CFG.minDays}–${CFG.maxDays} дней · бюджет ${budget.toLocaleString('ru-RU')} ₽</div>
+    </div>
+    <div class="status">${statusText}</div>
+  </div>
+</div>
+<div class="stats">
+  <div class="stat"><b>${now}</b>последняя проверка</div>
+  <div class="stat"><b>${next}</b>следующая</div>
+  <div class="stat"><b>${STATE.checks}</b>проверок</div>
+  <div class="stat"><b>${STATE.dealsFound}</b>алертов отправлено</div>
+  <div class="stat"><b>${upMin} мин</b>аптайм</div>
+  <div class="stat"><b>${deals.length}</b>маршрутов найдено</div>
+</div>
+<div class="wrap">
+<table>
+  <thead><tr>
+    <th>Направление</th><th>Страна</th><th>Даты</th><th>Дней</th>
+    <th>Авиа</th><th>Итого 5 пас.</th><th>На чел.</th><th>vs бюджет</th><th>Купить</th>
+  </tr></thead>
+  <tbody>${rows}${noData}</tbody>
+</table>
+</div>
+<div class="note">
+  ⚠️ Цены расчётные (API × ${PAXMULT}). Финальная цена — на сайте Aviasales для 5 пассажиров. 
+  Страница обновляется каждые 60 сек автоматически.
+  Проверок API: каждые ${CFG.intervalMin} мин.
+</div>
+</body>
+</html>`;
+}
+
 function startServer() {
-  http.createServer((_, res) => {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-      status: 'ok', uptime_sec: Math.floor(process.uptime()),
-      ...STATE, sentKeys: STATE.sentKeys.size,
-      config: {
-        endpoint:    'aviasales/v3/prices_for_dates',
-        months:      getMonths(),
-        maxPrice:    CFG.maxPriceTotal,
-        paxMult:     PAXMULT,
-        nights:      `${CFG.minDays}–${CFG.maxDays}`,
-        intervalMin: CFG.intervalMin,
-      },
-    }, null, 2));
-  }).listen(CFG.port, () => log(`Health :${CFG.port}`));
+  http.createServer((req, res) => {
+    if (req.url === '/json') {
+      // JSON endpoint для отладки
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        status: 'ok', uptime_sec: Math.floor(process.uptime()),
+        checks: STATE.checks, deals: STATE.lastDeals.length,
+        dealsFound: STATE.dealsFound, errors: STATE.errors,
+      }, null, 2));
+    } else {
+      // HTML Dashboard
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(renderDashboard());
+    }
+  }).listen(CFG.port, () => log(`Dashboard: http://localhost:${CFG.port}`));
 }
 
 // ── Bootstrap ──────────────────────────────────────────────────────────────
@@ -419,8 +573,12 @@ async function main() {
     `⏰ ${new Date().toLocaleString('ru-RU')}`
   );
 
+  STATE.nextCheck = new Date(Date.now() + CFG.intervalMin * 60000).toISOString();
   await runCheck();
-  setInterval(runCheck, CFG.intervalMin * 60 * 1000);
+  setInterval(() => {
+    STATE.nextCheck = new Date(Date.now() + CFG.intervalMin * 60000).toISOString();
+    runCheck();
+  }, CFG.intervalMin * 60 * 1000);
 }
 
 main().catch(e => { log(`Fatal: ${e.message}`, 'ERROR'); process.exit(1); });
