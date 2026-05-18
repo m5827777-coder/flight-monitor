@@ -1,0 +1,14 @@
+{
+  "name": "flight-monitor",
+  "version": "1.0.0",
+  "description": "MOW → VN/TH flight price monitor with Telegram alerts",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": ["flights", "telegram", "monitor"],
+  "license": "MIT"
+}
