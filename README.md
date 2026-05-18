@@ -1,7 +1,7 @@
 # ✈️ Flight Monitor — MOW → VN/TH
 
-Мониторинг авиабилетов из Москвы во Вьетнам и Таиланд с уведомлениями в Telegram.
-Данные берутся напрямую с **Aviasales через Travelpayouts API** (бесплатно).
+Мониторинг **горячих билетов Aviasales** с алертами в Telegram.
+Источник: Travelpayouts `v2/prices/latest` — кэш реальных поисков пользователей за последние 48 часов.
 
 **Параметры:** 3 взрослых + 2 детей · до 150 000 ₽ · 12–16 дней · каждые 60 мин
 
@@ -10,15 +10,14 @@
 ## 🔑 Шаг 1 — Получи бесплатный Travelpayouts токен
 
 1. Зайди на [travelpayouts.com](https://travelpayouts.com) → Регистрация (бесплатно)
-2. После входа: Инструменты → API → **Скопируй токен**
-3. Это всё — токен бесплатный, без лимитов для личного использования
+2. После входа: раздел **Разработчикам → API** → скопируй токен
 
 ---
 
-## 🐙 Шаг 2 — GitHub репозиторий
+## 🐙 Шаг 2 — GitHub
 
 1. [github.com](https://github.com) → New repository → `flight-monitor` → Create
-2. Загрузи все файлы (через Upload files или git):
+2. Загрузи все файлы:
 
 ```bash
 git init
@@ -43,7 +42,7 @@ Railway → Variables → добавь:
 
 | Переменная | Значение |
 |---|---|
-| `TRAVELPAYOUTS_TOKEN` | токен из travelpayouts.com |
+| `TRAVELPAYOUTS_TOKEN` | токен с travelpayouts.com |
 | `TELEGRAM_BOT_TOKEN` | токен бота |
 | `TELEGRAM_CHAT_ID` | твой chat ID |
 | `MAX_PRICE` | `150000` |
@@ -55,13 +54,4 @@ Railway → Variables → добавь:
 
 После деплоя в Telegram придёт `🚀 Flight Monitor запущен` — всё работает.
 
-**Стоимость:** Railway ~$5/мес (hobby plan). Travelpayouts API — бесплатно.
-
----
-
-## 📊 Health check
-
-Railway → Settings → Domains → открой URL. Ответ:
-```json
-{ "status": "ok", "checks": 12, "deals_found": 2 }
-```
+**Стоимость:** Railway ~$5/мес. Travelpayouts API — бесплатно.
