@@ -17,7 +17,7 @@ const CFG = {
 };
 
 // 3 взрослых + 2 детей × 75%
-const PAXMULT = CFG.adults + CFG.children * 0.75; // 4.5
+const PAXMULT = CFG.adults + CFG.children * 0.9; // 4.8
 
 // Пляжные направления
 const DESTINATIONS = [
@@ -104,17 +104,26 @@ function daysBetween(a, b) {
 }
 
 // ── Aviasales links ────────────────────────────────────────────────────────
+// Формат пассажиров: {adults}{child1age}{child2age}
+// 3 взрослых + дети 8 и 10 лет → "30810"
+// ⚠️ API даёт цену за 1 взрослого. Реальная цена на сайте для 5 пас. может отличаться.
+const PAX_SUFFIX = '30810'; // 3 adults, child 8yo, child 10yo
+
 function linkBuy(destCode, depStr, retStr) {
   const dep = urlDate(depStr), ret = urlDate(retStr);
-  if (!dep || !ret) return `https://www.aviasales.ru/?origin=MOW&destination=${destCode}`;
-  // 3 adults + child 09yo + child 11yo → "30911"
-  return `https://www.aviasales.ru/search/MOW${dep}${destCode}${ret}30911`;
+  if (!dep || !ret) return `https://www.aviasales.ru/?origin=MOW&destination=${destCode}&adults=3&children=2`;
+  return `https://www.aviasales.ru/search/MOW${dep}${destCode}${ret}${PAX_SUFFIX}`;
+}
+
+function linkFlex(destCode) {
+  // Гибкие даты — удобно когда точные даты ещё не выбраны
+  return `https://www.aviasales.ru/calendar/MOW${destCode}?adults=3&children=2&one_way=false`;
 }
 
 function linkChina(destCode, depStr, retStr) {
   const dep = urlDate(depStr), ret = urlDate(retStr);
-  if (!dep || !ret) return `https://www.aviasales.ru/?origin=MOW&destination=${destCode}`;
-  return `https://www.aviasales.ru/search/MOW${dep}${destCode}${ret}30911?stops=1`;
+  if (!dep || !ret) return `https://www.aviasales.ru/?origin=MOW&destination=${destCode}&adults=3&children=2`;
+  return `https://www.aviasales.ru/search/MOW${dep}${destCode}${ret}${PAX_SUFFIX}?stops=1`;
 }
 
 function stopsLabel(n) {
@@ -203,6 +212,7 @@ async function collectAll() {
             airline:   r.airline    || '—',
             transfers: r.transfers  ?? r.number_of_changes ?? null,
             linkBuy:   linkBuy(dest.code, depStr, retStr),
+            linkFlex:  linkFlex(dest.code),
             linkChina: linkChina(dest.code, depStr, retStr),
           });
         }
@@ -271,8 +281,9 @@ function buildHourly(all, n) {
   msg += `✈️ ${best.airline}`;
   if (best.transfers != null) msg += ` · ${stopsLabel(best.transfers)}`;
   msg += `\n💵 ~${pp.toLocaleString('ru-RU')} ₽/чел\n`;
-  msg += `🛒 <a href="${best.linkBuy}">Купить на Aviasales</a>\n`;
+  msg += `🛒 <a href="${best.linkBuy}">Купить на Aviasales</a> · <a href="${best.linkFlex}">📅 гибкие даты</a>\n`;
   msg += `🇨🇳 <a href="${best.linkChina}">Искать через Китай</a>\n`;
+  msg += `⚠️ <i>Цена расчётная (×4.8). Итог на сайте — для 5 пас.</i>\n`;
   msg += `──────────────────────\n`;
 
   // Топ по уникальным направлениям
