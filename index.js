@@ -21,14 +21,36 @@ const PAXMULT = CFG.adults + CFG.children * 0.75; // 4.5
 
 // Пляжные направления
 const DESTINATIONS = [
-  { code: 'HKT', city: 'Пхукет',  country: 'Таиланд' },
-  { code: 'USM', city: 'Самуи',   country: 'Таиланд' },
-  { code: 'KBV', city: 'Краби',   country: 'Таиланд' },
-  { code: 'BKK', city: 'Бангкок', country: 'Таиланд' },
-  { code: 'DAD', city: 'Дананг',  country: 'Вьетнам' },
-  { code: 'CXR', city: 'Нячанг',  country: 'Вьетнам' },
-  { code: 'PQC', city: 'Фукуок',  country: 'Вьетнам' },
-  { code: 'SGN', city: 'Хошимин', country: 'Вьетнам' },
+  // 🇹🇭 Таиланд
+  { code: 'HKT', city: 'Пхукет',            country: 'Таиланд' },
+  { code: 'USM', city: 'Самуи',              country: 'Таиланд' },
+  { code: 'KBV', city: 'Краби',              country: 'Таиланд' },
+  { code: 'BKK', city: 'Бангкок',            country: 'Таиланд' },
+  { code: 'HHQ', city: 'Хуахин',             country: 'Таиланд' },
+  // 🇻🇳 Вьетнам
+  { code: 'DAD', city: 'Дананг',             country: 'Вьетнам' },
+  { code: 'CXR', city: 'Нячанг',             country: 'Вьетнам' },
+  { code: 'PQC', city: 'Фукуок',             country: 'Вьетнам' },
+  { code: 'SGN', city: 'Хошимин',            country: 'Вьетнам' },
+  // 🇮🇩 Индонезия
+  { code: 'DPS', city: 'Бали',               country: 'Индонезия' },
+  { code: 'LOP', city: 'Ломбок',             country: 'Индонезия' },
+  // 🇲🇾 Малайзия
+  { code: 'LGK', city: 'Лангкави',           country: 'Малайзия' },
+  { code: 'BKI', city: 'Кота-Кинабалу',      country: 'Малайзия' },
+  { code: 'KUL', city: 'Куала-Лумпур',       country: 'Малайзия' },
+  // 🇵🇭 Филиппины
+  { code: 'CEB', city: 'Себу',               country: 'Филиппины' },
+  { code: 'MPH', city: 'Боракай (Калибо)',   country: 'Филиппины' },
+  { code: 'PPS', city: 'Палаван',            country: 'Филиппины' },
+  // 🇲🇻 Мальдивы
+  { code: 'MLE', city: 'Мале',               country: 'Мальдивы' },
+  // 🇸🇬 Сингапур
+  { code: 'SIN', city: 'Сингапур',           country: 'Сингапур' },
+  // 🇰🇭 Камбоджа
+  { code: 'REP', city: 'Сиемреап',           country: 'Камбоджа' },
+  // 🇱🇰 Шри-Ланка
+  { code: 'CMB', city: 'Коломбо',            country: 'Шри-Ланка' },
 ];
 
 // Следующие 5 месяцев
@@ -85,14 +107,14 @@ function daysBetween(a, b) {
 function linkBuy(destCode, depStr, retStr) {
   const dep = urlDate(depStr), ret = urlDate(retStr);
   if (!dep || !ret) return `https://www.aviasales.ru/?origin=MOW&destination=${destCode}`;
-  // Format: {adults}{child1_age}{child2_age} → "31010" = 3 adults + 2 children age 10
-  return `https://www.aviasales.ru/search/MOW${dep}${destCode}${ret}31010`;
+  // 3 adults + child 09yo + child 11yo → "30911"
+  return `https://www.aviasales.ru/search/MOW${dep}${destCode}${ret}30911`;
 }
 
 function linkChina(destCode, depStr, retStr) {
   const dep = urlDate(depStr), ret = urlDate(retStr);
   if (!dep || !ret) return `https://www.aviasales.ru/?origin=MOW&destination=${destCode}`;
-  return `https://www.aviasales.ru/search/MOW${dep}${destCode}${ret}31010?stops=1`;
+  return `https://www.aviasales.ru/search/MOW${dep}${destCode}${ret}30911?stops=1`;
 }
 
 function stopsLabel(n) {
@@ -240,7 +262,7 @@ function buildHourly(all, n) {
   const near = best.inRange ? '' : ' ⚡ближайший';
 
   let msg = `📊 <b>Мониторинг #${n}</b> · ${now}\n`;
-  msg += `✈️ Москва → 🏖 пляжи · туда-обратно · ${CFG.minDays}–${CFG.maxDays} дн\n`;
+  msg += `✈️ Москва → 🏖 пляжи ЮВА · туда-обратно · ${CFG.minDays}–${CFG.maxDays} дн\n`;
   msg += `👨‍👩‍👧‍👦 3 взр + 2 дет · бюджет ${CFG.maxPriceTotal.toLocaleString('ru-RU')} ₽ · ${icon}\n`;
   msg += `──────────────────────\n`;
   msg += `📉 <b>Минимум: ${best.totalRub.toLocaleString('ru-RU')} ₽</b>${near}\n`;
@@ -373,9 +395,12 @@ async function main() {
   await tg(
     `🚀 <b>Flight Monitor v5 запущен</b>\n` +
     `📡 Aviasales API v3 (prices_for_dates)\n` +
-    `🏖 Москва → пляжи Вьетнама и Таиланда\n` +
-    `   Пхукет · Самуи · Краби · Бангкок\n` +
-    `   Дананг · Нячанг · Фукуок · Хошимин\n` +
+    `🏖 Москва → пляжи Юго-Восточной Азии\n` +
+    `   🇹🇭 Пхукет · Самуи · Краби · Хуахин\n` +
+    `   🇻🇳 Дананг · Нячанг · Фукуок\n` +
+    `   🇮🇩 Бали · Ломбок · 🇲🇾 Лангкави · Кота-Кинабалу\n` +
+    `   🇵🇭 Себу · Боракай · Палаван · 🇲🇻 Мальдивы\n` +
+    `   🇸🇬 Сингапур · 🇰🇭 Сиемреап · 🇱🇰 Коломбо\n` +
     `👨‍👩‍👧‍👦 3 взрослых + 2 детей · туда-обратно\n` +
     `📅 ${CFG.minDays}–${CFG.maxDays} дней\n` +
     `💰 Бюджет: ${CFG.maxPriceTotal.toLocaleString('ru-RU')} ₽\n` +
